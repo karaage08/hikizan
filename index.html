@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Calc Trainer Custom</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+body {
+  margin: 0;
+  background: #d0e8ff;
+  color: #444;
+  font-family: "Rounded Mplus 1c", "Segoe UI", sans-serif;
+  text-align: center;
+}
+
+.screen { display:none; padding:20px; }
+.title { font-size:36px; margin-top:20px; color:#4f8cff; font-weight:bold; }
+.subtitle { font-size:22px; margin-top:10px; color:#3a6fcc; font-weight:bold; }
+
+.cardGrid {
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(160px,1fr));
+  gap:16px;
+  padding:20px;
+}
+.card {
+  position:relative;
+  border-radius:16px;
+  padding:20px;
+  background:#fff;
+  color:#4f8cff;
+  font-size:22px;
+  font-weight:bold;
+  box-shadow:0 4px 12px rgba(106,169,255,0.3);
+  cursor:pointer;
+  transition:transform 0.15s;
+}
+.card.blue { background:#4f8cff; color:#fff; }
+.card:active { transform:scale(0.95); }
+
+/* トロフィー */
+.trophy {
+  position:absolute;
+  top:6px;
+  right:10px;
+  font-size:26px;
+}
+
+.btn {
+  padding:14px 26px;
+  font-size:22px;
+  border:none;
+  border-radius:14px;
+  background:#6aa9ff;
+  color:#fff;
+  cursor:pointer;
+  margin:12px auto;
+  display:block;
+  width:80%;
+  max-width:280px;
+}
+.btn:active { transform:scale(0.95); }
+
+#problemText {
+  margin:30px auto;
+  background:#fff;
+  padding:28px;
+  width:80%;
+  max-width:320px;
+  border-radius:20px;
+  font-size:32px;
+  font-weight:bold;
+  color:#4f8cff;
+}
+
+#answerInput {
+  margin-top:20px;
+  font-size:28px;
+  padding:12px;
+  width:70%;
+  max-width:240px;
+  text-align:center;
+  border-radius:12px;
+  border:2px solid #6aa9ff;
+}
+
+.mark-correct { font-size:48px; color:#27ae60; }
+.mark-wrong { font-size:48px; color:#e74c3c; }
+
+#hudMode,#hudCount,#hudTime {
+  font-size:18px;
+  margin-top:4px;
+}
+</style>
+</head>
+
+<body>
+
+<!-- タイトル画面 -->
+<div id="modeScreen" class="screen" style="display:block;">
+  <div class="title">Calc Trainer Custom</div>
+  <div class="subtitle">難易度を選んでください</div>
+
+  <div class="cardGrid" id="cardGrid"></div>
+
+  <div id="selectedModeText">未選択</div>
+
+  <button class="btn" onclick="startGame()">スタート</button>
+
+  <div id="bestArea">
+    <div class="subtitle">自己ベスト</div>
+    <div id="bestList"></div>
+  </div>
+</div>
+
+<!-- ゲーム画面 -->
+<div id="gameScreen" class="screen">
+  <div id="hudMode"></div>
+  <div id="hudCount"></div>
+  <div id="hudTime"></div>
+
+  <div id="problemText"></div>
+  <input id="answerInput" type="number" placeholder="答え(Enter)">
+  <div id="markArea"></div>
+
+  <button class="btn" onclick="backToTitle()">タイトルへ</button>
+</div>
+
+<!-- 結果画面 -->
+<div id="resultScreen" class="screen">
+  <div class="title">結果</div>
+
+  <div id="resultTime"></div>
+  <div id="resultRank"></div>
+
+  <div id="wrongProblemsDiv"></div>
+
+  <button class="btn" onclick="startGame()">もう一度</button>
+  <button class="btn" onclick="backToTitle()">タイトルへ</button>
+</div>
+
+<script>
+let mode = "";
+let correctCount = 0;
+let wrongProblems = [];
+let startTime = 0;
+let timerId = null;
+let correctAnswer = 0;
+
+/* ★カード生成（★1〜★17） */
+function createCards() {
+  const grid = document.getElementById("cardGrid");
+  grid.innerHTML = "";
+
+  for (let i = 1; i <= 17; i++) {
+    const div = document.createElement("div");
+    div.className = "card";
+    div.id = "card_star" + i;
+    div.textContent = "★" + i;
+
+    div.onclick = () => trySelect("star" + i);
+
+    if (localStorage.getItem("star" + i + "_clear") === "true") {
+      const trophy = document.createElement("div");
+      trophy.className = "trophy";
+      trophy.textContent = "🏆";
+      div.appendChild(trophy);
+      div.classList.add("blue");
+    }
+
+    grid.appendChild(div);
+  }
+}
+createCards();
+
+/* 画面切替 */
+function show(id) {
+  modeScreen.style.display = "none";
+  gameScreen.style.display = "none";
+  resultScreen.style.display = "none";
+  document.getElementById(id).style.display = "block";
+}
+
+/* ★4以降は前の★クリアで解放 */
+function trySelect(m) {
+  const num = Number(m.replace("star", ""));
+
+  if (num > 3) {
+    const prevKey = "star" + (num - 1) + "_clear";
+    if (localStorage.getItem(prevKey) !== "true") {
+      alert(`★${num - 1} をクリアすると ★${num} が解放されます`);
+      return;
+    }
+  }
+
+  mode = m;
+  selectedModeText.textContent = "選択中: " + m;
+
+  document.querySelectorAll(".card").forEach(c => c.classList.remove("blue"));
+  const card = document.getElementById("card_" + m);
+  card.classList.add("blue");
+}
+
+/* ランダム */
+function rand(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+/* 問題生成（★1〜★17） */
+function newProblem() {
+  let a, b, total;
+
+  /* ★1：答えが10未満 */
+  if (mode === "star1") {
+    total = rand(2, 9);
+    a = rand(1, total - 1);
+    correctAnswer = total - a;
+    problemText.textContent = `${a} + □ = ${total}`;
+  }
+
+  /* ★2：答えが10 */
+  else if (mode === "star2") {
+    a = rand(1, 9);
+    correctAnswer = 10 - a;
+    problemText.textContent = `${a} + □ = 10`;
+  }
+
+  /* ★3：1〜10 − □（答えは正の数） */
+/* ★3：1〜10 − □ = 答え（0以外の正の数） */
+else if (mode === "star3") {
+  const ans = rand(1, 9);          // 答え（1〜9）
+  a = rand(ans + 1, 10);           // a は ans+1〜10
+  correctAnswer = a - ans;         // ← □ に入る数が正解
+  problemText.textContent = `${a} - □ = ${ans}`;
+}
+
+/* ★4〜★8：必ず繰り上がりが起こる問題（a + □ ≥ 10） */
+else if (mode === "star4") {
+  a = rand(1, 3);
+  const bMin = 10 - a;        // 繰り上がりが起きる最小値
+  const b = rand(bMin, 9);    // □（一桁）
+  const total = a + b;
+  correctAnswer = b;
+  problemText.textContent = `${a} + □ = ${total}`;
+}
+
+else if (mode === "star5") {
+  a = rand(4, 6);
+  const bMin = 10 - a;
+  const b = rand(bMin, 9);
+  const total = a + b;
+  correctAnswer = b;
+  problemText.textContent = `${a} + □ = ${total}`;
+}
+
+else if (mode === "star6") {
+  a = 7;
+  const bMin = 10 - a;        // 3〜9
+  const b = rand(bMin, 9);
+  const total = a + b;
+  correctAnswer = b;
+  problemText.textContent = `${a} + □ = ${total}`;
+}
+
+else if (mode === "star7") {
+  a = 8;
+  const bMin = 10 - a;        // 2〜9
+  const b = rand(bMin, 9);
+  const total = a + b;
+  correctAnswer = b;
+  problemText.textContent = `${a} + □ = ${total}`;
+}
+
+else if (mode === "star8") {
+  a = 9;
+  const bMin = 10 - a;        // 1〜9
+  const b = rand(bMin, 9);
+  const total = a + b;
+  correctAnswer = b;
+  problemText.textContent = `${a} + □ = ${total}`;
+}
+
+  /* ★9：二桁 − 一桁（繰り下がりなし） */
+  else if (mode === "star9") {
+    do {
+      a = rand(10,19);
+      b = rand(1,9);
+    } while ((a % 10) < b);
+    correctAnswer = a - b;
+    problemText.textContent = `${a} - ${b}`;
+  }
+
+  /* ★10：二桁 − 一桁（繰り下がりあり） */
+  else if (mode === "star10") {
+    do {
+      a = rand(10,19);
+      b = rand(1,9);
+    } while ((a % 10) >= b);
+    correctAnswer = a - b;
+    problemText.textContent = `${a} - ${b}`;
+  }
+
+  /* ★11：二桁 − 一桁（繰り下がりあり／なしランダム） */
+  else if (mode === "star11") {
+    a = rand(10,19);
+    b = rand(1,9);
+    correctAnswer = a - b;
+    problemText.textContent = `${a} - ${b}`;
+  }
+
+  /* ★12：一桁 − 一桁（必ずマイナス） */
+  else if (mode === "star12") {
+    do {
+      a = rand(1,9);
+      b = rand(1,9);
+    } while (a >= b);
+    correctAnswer = a - b;
+    problemText.textContent = `${a} - ${b}`;
+  }
+
+  /* ★13：二桁 − 二桁（繰り下がりなし） */
+  else if (mode === "star13") {
+    do {
+      a = rand(10,99);
+      b = rand(10,99);
+    } while (a < b || (a % 10) < (b % 10));
+    correctAnswer = a - b;
+    problemText.textContent = `${a} - ${b}`;
+  }
+
+  /* ★14：二桁 − 二桁（繰り下がりあり） */
+  else if (mode === "star14") {
+    do {
+      a = rand(10,99);
+      b = rand(10,99);
+    } while (a < b || (a % 10) >= (b % 10));
+    correctAnswer = a - b;
+    problemText.textContent = `${a} - ${b}`;
+  }
+
+  /* ★15：二桁 − 二桁（繰り下がりあり／なしランダム） */
+  else if (mode === "star15") {
+    a = rand(10,99);
+    b = rand(10,99);
+    correctAnswer = a - b;
+    problemText.textContent = `${a} - ${b}`;
+  }
+
+  /* ★16：総合計算 */
+  else if (mode === "star16") {
+    const t = rand(1,3);
+    if (t === 1) { a = rand(1,9); b = rand(1,9); }
+    if (t === 2) { a = rand(10,99); b = rand(1,9); }
+    if (t === 3) { a = rand(10,99); b = rand(10,99); }
+    correctAnswer = a - b;
+    problemText.textContent = `${a} - ${b}`;
+  }
+
+  /* ★17：文章題 */
+  else if (mode === "star17") {
+    a = rand(10,50);
+    b = rand(1,20);
+    correctAnswer = a - b;
+    problemText.textContent = `箱に ${a} 個あります。${b} 個取り出しました。残りは？`;
+  }
+
+  markArea.textContent = "";
+  markArea.className = "";
+  hudCount.textContent = `Q: ${correctCount} / 10`;
+  answerInput.value = "";
+  answerInput.focus();
+}
+
+/* ランク判定 */
+function rankOf(t) {
+  if (t < 20) return "A";
+  if (t < 35) return "B";
+  if (t < 55) return "C";
+  if (t < 80) return "D";
+  return "E";
+}
+
+/* ゲーム開始 */
+function startGame() {
+  if (!mode) {
+    alert("難易度を選んでください");
+    return;
+  }
+
+  correctCount = 0;
+  wrongProblems = [];
+
+  hudMode.textContent = `MODE: ${mode}`;
+  hudCount.textContent = "Q: 0 / 10";
+  hudTime.textContent = "TIME: 0.0s";
+
+  show("gameScreen");
+
+  startTime = Date.now();
+  if (timerId) clearInterval(timerId);
+  timerId = setInterval(() => {
+    const t = ((Date.now() - startTime) / 1000).toFixed(1);
+    hudTime.textContent = `TIME: ${t}s`;
+  }, 100);
+
+  newProblem();
+}
+
+/* 答え判定 */
+function checkAnswer() {
+  const userValue = Number(answerInput.value);
+
+  if (userValue === correctAnswer) {
+    markArea.textContent = "○";
+    markArea.className = "mark-correct";
+    correctCount++;
+
+    if (correctCount >= 10) {
+      finishGame();
+    } else {
+      setTimeout(newProblem, 250);
+    }
+  } else {
+    markArea.textContent = "×";
+    markArea.className = "mark-wrong";
+    wrongProblems.push(`${problemText.textContent} → ${correctAnswer}`);
+    answerInput.value = "";
+    answerInput.focus();
+    setTimeout(() => {
+      markArea.textContent = "";
+      markArea.className = "";
+    }, 300);
+  }
+
+  hudCount.textContent = `Q: ${correctCount} / 10`;
+}
+
+/* Enterキー */
+document.addEventListener("keydown", e => {
+  if (gameScreen.style.display === "block" && e.key === "Enter") {
+    checkAnswer();
+  }
+});
+
+/* 結果処理 */
+function finishGame() {
+  clearInterval(timerId);
+
+  const totalSec = ((Date.now() - startTime) / 1000).toFixed(1);
+  const rank = rankOf(Number(totalSec));
+  const finalRank = (rank === "A" && wrongProblems.length === 0) ? "S" : rank;
+
+  resultTime.textContent = `TIME: ${totalSec}s`;
+  resultRank.textContent = `RANK: ${finalRank}`;
+
+  if (finalRank === "S") {
+    localStorage.setItem(mode + "_clear", "true");
+    const card = document.getElementById("card_" + mode);
+    card.classList.add("blue");
+
+    const trophy = document.createElement("div");
+    trophy.className = "trophy";
+    trophy.textContent = "🏆";
+    card.appendChild(trophy);
+  }
+
+  const wrongDiv = document.getElementById("wrongProblemsDiv");
+  if (wrongProblems.length) {
+    wrongDiv.innerHTML = wrongProblems.join("<br>");
+  } else {
+    wrongDiv.textContent = "間違いなし！";
+  }
+
+  show("resultScreen");
+}
+
+/* タイトルへ戻る */
+function backToTitle() {
+  show("modeScreen");
+  loadBests();
+}
+
+/* 自己ベスト一覧 */
+function loadBests() {
+  const bestList = document.getElementById("bestList");
+  bestList.innerHTML = "";
+  for (let i = 1; i <= 17; i++) {
+    const best = localStorage.getItem("star" + i + "_best");
+    if (best) {
+      bestList.innerHTML += `★${i}: ${best}s<br>`;
+    }
+  }
+}
+loadBests();
+</script>
+
+</body>
+</html>
